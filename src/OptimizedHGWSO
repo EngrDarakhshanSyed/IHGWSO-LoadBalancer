@@ -1,0 +1,469 @@
+package org.cloudbus.cloudsim.examples;
+
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
+
+import org.cloudbus.cloudsim.*;
+import org.cloudbus.cloudsim.core.CloudSim;
+import org.cloudbus.cloudsim.core.SimEvent;
+
+import java.io.BufferedWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.util.*;
+
+public class OptimizedHGWSO extends DatacenterBroker {
+
+    private int numWolves = 12;
+    private int maxIterations = 100;
+    private int numVMs = 0;
+    private int numCloudlets = 0;
+    private static final int THREAD_COUNT = 10;
+
+
+    // PSO specific fields
+    private List<IParticle2> particles;
+    private IParticle2 gBest;
+    private double c1Max = 2.0, c1Min = 0.5;
+    private double c2Max = 2.0, c2Min = 0.5;
+    private double wMax = 0.9, wMin = 0.4; // Dynamic inertia weight
+    private double w;
+    
+    public long minimumTime = Integer.MAX_VALUE;
+    public long maximumTime = -1;
+    public long myit = 0;
+    
+
+    // Grey Wolf Optimization (GWO) specific fields
+    private IWolf alphaWolf, betaWolf, deltaWolf;
+
+    public  OptimizedHGWSO (String name) throws Exception {
+        super(name);
+    }
+
+    public  OptimizedHGWSO(String name, int numWolves, int maxIterations, int numVMs, int numCloudlets) throws Exception {
+        super(name);
+        this.numWolves = numWolves;
+        this.maxIterations = maxIterations;
+        this.numCloudlets = numCloudlets;
+        this.numVMs = numVMs;
+    }
+    
+
+
+    public void performHGWSO() {
+        List<Cloudlet> sortedList = new ArrayList<>(getCloudletList());
+        this.numCloudlets = sortedList.size();
+        this.numVMs = vmList.size();
+
+        // Initialize wolf and particle populations
+     //   List<IWolf> wolves = initializeWolves(numWolves);
+        List<IWolf> wolves = initializeWolves(numWolves);
+        particles = initializeParticles(numWolves, getCloudletList(), getVmList());
+        gBest = particles.get(0);
+
+        IParticle2 pgBest = null;
+        int stagnationCounter = 0;
+        double previousBestFitness = Double.MAX_VALUE;
+        double convergenceThreshold = 1e-3;
+        int maxStagnation = 20;
+        
+        long[] minimumTime = {Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE};
+        long[] maximumTime = {-1,-1,-1};
+        
+        long start = Integer.MAX_VALUE;
+        long end = -1;
+        long duration = -1;
+        
+        for (int iteration = 0; iteration < maxIterations; iteration++) {
+            // Update inertia weight, cognitive, and social coefficients dynamically
+            w = wMax - ((wMax - wMin) * iteration / maxIterations);
+            double c1 = c1Max - ((c1Max - c1Min) * iteration / maxIterations);
+            double c2 = c2Min + ((c2Max - c2Min) * iteration / maxIterations);
+
+            start = System.nanoTime();
+            
+            // 1. Calculate fitness for wolves and particles
+            calculateFitnessValues(wolves);
+            updateLeaders(wolves);
+            
+            end = System.nanoTime();
+
+            duration = end - start;
+            minimumTime[0] = Math.min(minimumTime[0], duration);
+            maximumTime[0] = Math.max(maximumTime[0], duration);
+            
+            start = System.nanoTime();
+            // 2. Update positions of wolves using Grey Wolf Optimization
+            updateWolfPositions(wolves, alphaWolf, betaWolf, deltaWolf);
+
+            end = System.nanoTime();
+            duration = end - start;
+            minimumTime[1] = Math.min(minimumTime[1], duration);
+            maximumTime[1] = Math.max(maximumTime[1], duration);
+            
+            // 3. Update positions of particles using PSO
+            start = System.nanoTime();
+            
+            pgBest = gBest;
+            updateParticlesPositions(iteration + 1, c1, c2);
+            
+            end = System.nanoTime();
+            
+            duration = end - start;
+            minimumTime[2] = Math.min(minimumTime[2], duration);
+            maximumTime[2] = Math.max(maximumTime[2], duration);
+            
+
+            
+//            Path path = Paths.get("D:\\swarm_dk\\hgwso.csv");
+//            try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND))
+//           {
+//             writer.append((iteration + 1) + "," + pgBest.bestFitness+ "\n");
+//            writer.close();
+//             } 
+//            catch (Exception ex) 
+//            {
+//                ex.printStackTrace();
+//                 }
+
+//            // Check for convergence based on global best fitness
+            if (Math.abs(gBest.bestFitness - previousBestFitness) < convergenceThreshold) {
+               stagnationCounter++;
+               if (stagnationCounter >= maxStagnation) {
+            	   Log.printLine("Convergence achieved at iteration: " + iteration);
+                   break;
+                }
+            } else {
+                stagnationCounter = 0;
+            }
+
+           // previousBestFitness = gBest.bestFitness;
+
+           // Save results for each iteration
+        
+        }
+
+        // Final cloudlet-to-VM binding based on the global best particle
+        for (Cloudlet cloudlet : getCloudletList()) {
+            VMToUsage targetVm = pgBest.position.get(cloudlet);
+            if (targetVm != null) {
+                bindCloudletToVm(cloudlet.getCloudletId(), targetVm.vm.getId());
+            }
+        }
+
+        Log.printLine("Final Mapping: "+ maxIterations + "    "+ this.myit +" => [" + this.minimumTime + ", " + this.maximumTime + "] [" + minimumTime[0] + ", " + maximumTime[0] + "] [" + minimumTime[1] + ", " + maximumTime[1] + "] [" + minimumTime[2] + ", " + maximumTime[2] + "]");
+        
+      //  gBest.printCloudletVmFitnessEffi();
+    }
+
+    private List<IWolf> initializeWolves(int numWolves) {
+        List<IWolf> population = new ArrayList<>();
+        for (int i = 0; i < numWolves; i++) {
+            IWolf wolf = new IWolf(getCloudletList(), getVmList(), i);
+            population.add(wolf);
+        }
+        return population;
+    }
+
+    public void calculateFitnessValues(List<IWolf> wolves) {
+        for (IWolf wolf : wolves) {
+            wolf.calculateFitness(this.getCloudletList(), this.getVmList());
+        	//wolf.calculateFitness();
+        }
+    
+    }
+
+    private void updateLeaders(List<IWolf> wolves) {
+        alphaWolf = wolves.stream().min(Comparator.comparingDouble(IWolf::getFitness)).orElse(wolves.get(0));
+        betaWolf = wolves.stream().filter(w -> w != alphaWolf).min(Comparator.comparingDouble(IWolf::getFitness)).orElse(wolves.get(0));
+        deltaWolf = wolves.stream().filter(w -> w != alphaWolf && w != betaWolf).min(Comparator.comparingDouble(IWolf::getFitness)).orElse(wolves.get(0));
+    }
+
+    private void updateWolfPositions(List<IWolf> wolves, IWolf alphaWolf, IWolf betaWolf, IWolf deltaWolf) {
+        for (IWolf wolf : wolves) {
+            wolf.updatePosition(alphaWolf, betaWolf, deltaWolf);
+        }
+    }
+
+    private void updateParticlesPositions(int iteration, double c1, double c2) {
+    	int count = 0;
+        for (IParticle2 particle : particles) {
+            count += updateParticleVelocityAndPosition(particle, iteration, c1, c2);
+            if (particle.bestFitness < gBest.bestFitness) {
+                gBest = particle;
+            }
+        }
+        //Log.printLine("count for single iteration (loop * nested loop) " + (count * this.cloudletList.size()));
+        
+    }
+
+    static class FitnessResult {
+        double bestFitness;
+        Map<Cloudlet, VMToUsage> bestPosition;
+        int count;
+
+        FitnessResult(double bestFitness, Map<Cloudlet, VMToUsage> bestPosition, int count) {
+            this.bestFitness = bestFitness;
+            this.bestPosition = new HashMap<>(bestPosition); // Deep copy
+            this.count = count;
+        }
+    }
+    
+    double getProcessingTime(Cloudlet cloudlet, Vm vm) {
+        try {
+            if (vm.getMips() <= 0) {
+                return Double.MAX_VALUE;
+            }
+        } catch(Exception e) {
+            Log.print("Exception " + e.toString());
+        }
+
+        return cloudlet.getCloudletLength() / vm.getMips();
+    }
+    
+    List<Cloudlet> getCloudletsAssignedToVm(VMToUsage vm, List<Cloudlet> allCloudlets) {
+        // Assuming a method `getCloudletList()` that gives you all cloudlets
+
+        // Filter out the cloudlets that are assigned to the given VM
+        return allCloudlets.stream()
+                           .filter(cloudlet -> cloudlet.getVmId() == vm.getVM().getId())
+                           .collect(Collectors.toList());
+    }
+    
+    double getVmCurrentEndTime(VMToUsage vm, List<Cloudlet> allCloudlets) {
+        List<Cloudlet> assignedCloudlets = getCloudletsAssignedToVm(vm, allCloudlets);
+
+        // Compute the total processing time of all cloudlets assigned to this VM
+        double totalProcessingTime = assignedCloudlets.stream()
+                .mapToDouble(cloudlet -> getProcessingTime(cloudlet, vm.getVM()))
+                .sum();
+
+        return totalProcessingTime;
+    }
+    
+    double calculateResponseTimeFitness(Cloudlet cloudlet, VMToUsage vm, List<Cloudlet> allCloudlets) {
+        
+    	double dataTransferTime = cloudlet.getCloudletFileSize() / Math.max(1.0, vm.getVM().getBw());
+        double vmCurrentEndTime = getVmCurrentEndTime(vm, allCloudlets);
+        double waitingTime = Math.max(0, vmCurrentEndTime - cloudlet.getSubmissionTime());
+        
+        return dataTransferTime + waitingTime;
+    }
+    
+    private int  updateParticleVelocityAndPosition2(IParticle2 particle, int iteration, double c1, double c2) {
+    	ExecutorService executor = Executors.newFixedThreadPool(THREAD_COUNT);
+        List<Future<FitnessResult>> futures = new ArrayList<>();
+        
+        Map<Cloudlet, Double> precomputedProcessingTime = new HashMap<>(); 
+        for (Map.Entry<Cloudlet, VMToUsage> entry : particle.position.entrySet()) {
+            Cloudlet cloudlet = entry.getKey();
+            Vm vm = entry.getValue().getVM();
+
+            try {
+                double baseProcessing = getProcessingTime(cloudlet, vm); // only once
+                precomputedProcessingTime.put(cloudlet, baseProcessing);
+            } catch (Exception e) {
+                Log.printLine("Precomputation error: " + e.getMessage());
+            }
+        }
+        
+        Map<Cloudlet, Double> preResponseTimeFitness = new HashMap<>();
+        for (Map.Entry<Cloudlet, VMToUsage> entry : particle.position.entrySet()) {
+            Cloudlet cloudlet = entry.getKey();
+            VMToUsage vm = entry.getValue();
+
+            try {
+                double baseProcessing = calculateResponseTimeFitness(cloudlet, vm, getCloudletList()); // only once
+                preResponseTimeFitness.put(cloudlet, baseProcessing);
+            } catch (Exception e) {
+                Log.printLine("Precomputation error: " + e.getMessage());
+            }
+        }
+        
+        int totalCloudlets = cloudletList.size();
+        int partitionSize = (int) Math.ceil((double) totalCloudlets / THREAD_COUNT);
+        
+
+        for (int i = 0; i < THREAD_COUNT; i++) {
+            int start = i * partitionSize;
+            int end = Math.min(start + partitionSize, totalCloudlets);
+
+            if (start >= end) break; // Avoid empty partitions
+
+            List<Cloudlet> partition = getCloudletList().subList(start, end);
+
+            Callable<FitnessResult> task = () -> {
+            	int count = 0;
+                double localBestFitness = Double.MAX_VALUE;
+                Map<Cloudlet, VMToUsage> localBestPosition = new HashMap<>();
+                long startTime = Integer.MAX_VALUE;
+                long endTime = 0;
+                for (Cloudlet cloudlet : partition) {
+                	this.myit++;
+                	startTime = System.nanoTime();
+                    VMToUsage currentVelocityVM = particle.velocity.get(cloudlet);
+                    VMToUsage particleBestPositionVM = particle.bestPosition.get(cloudlet);
+                    VMToUsage alphaPositionVM = alphaWolf.getPosition().get(cloudlet);
+
+                    double rand1 = Math.random();
+                    double rand2 = Math.random();
+                    double updatedUsageIndex = w * particle.velocity.get(cloudlet).getUsage()
+                            + c1 * rand1 * (alphaPositionVM.getUsage() - currentVelocityVM.getUsage())
+                            + c2 * rand2 * (particleBestPositionVM.getUsage() - currentVelocityVM.getUsage());
+
+                    int vmIndex = Math.max(0, Math.min((int) updatedUsageIndex, vmList.size() - 1));
+
+                    VMToUsage updatedVelocityVMToUsage = (currentVelocityVM.getVM().getId() == vmIndex) ? currentVelocityVM : null;
+                    VMToUsage updatedPositionVMToUsage = (particle.position.get(cloudlet).getVM().getId() == vmIndex) ? particle.position.get(cloudlet) : null;
+
+                    if (updatedVelocityVMToUsage != null)
+                        particle.velocity.put(cloudlet, updatedVelocityVMToUsage);
+
+                    if (updatedPositionVMToUsage != null)
+                        particle.position.put(cloudlet, updatedPositionVMToUsage);
+
+                    count++;
+                    double fitness = particle.computeFitness(particle.position, getCloudletList(), getVmList(),
+                    		precomputedProcessingTime, preResponseTimeFitness);
+
+                    if (fitness < localBestFitness) {
+                        localBestFitness = fitness;
+                        localBestPosition = new HashMap<>(particle.position); // Deep copy
+                    }
+                    endTime = System.nanoTime();
+                    long duration = endTime - startTime;
+                    this.minimumTime = Math.min(this.minimumTime, duration);
+                    this.maximumTime = Math.max(this.maximumTime, duration);
+                }
+                return new FitnessResult(localBestFitness, localBestPosition,count);
+            };
+
+            futures.add(executor.submit(task));
+        }
+
+        // Wait for all threads to complete and determine the best fitness globally
+        double globalBestFitness = particle.bestFitness;
+        Map<Cloudlet, VMToUsage> globalBestPosition = new HashMap<>(particle.bestPosition);
+
+        int count = 0;
+        for (Future<FitnessResult> future : futures) {
+            try {
+                FitnessResult result = future.get(); // Wait for thread completion
+                if (result.bestFitness < globalBestFitness) {
+                    globalBestFitness = result.bestFitness;
+                    globalBestPosition = new HashMap<>(result.bestPosition); // Deep copy
+                }
+                count += result.count;
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+
+        // Update the global best fitness and position after all threads complete
+        particle.bestFitness = globalBestFitness;
+        particle.bestPosition = globalBestPosition;
+        
+
+        executor.shutdown();
+        return count;
+    }
+        
+    
+    private double updateParticleVelocityAndPosition(IParticle2 particle, int iteration, double c1, double c2) {
+    	long startTime = Integer.MAX_VALUE;
+        long endTime = 0;
+        
+        Map<Cloudlet, Double> precomputedProcessingTime = new HashMap<>();
+        for (Map.Entry<Cloudlet, VMToUsage> entry : particle.position.entrySet()) {
+            Cloudlet cloudlet = entry.getKey();
+            Vm vm = entry.getValue().getVM();
+
+            try {
+                double baseProcessing = getProcessingTime(cloudlet, vm); // only once
+                precomputedProcessingTime.put(cloudlet, baseProcessing);
+            } catch (Exception e) {
+                Log.printLine("Precomputation error: " + e.getMessage());
+            }
+        }
+        
+        Map<Cloudlet, Double> preResponseTimeFitness = new HashMap<>();
+        for (Map.Entry<Cloudlet, VMToUsage> entry : particle.position.entrySet()) {
+            Cloudlet cloudlet = entry.getKey();
+            VMToUsage vm = entry.getValue();
+
+            try {
+                double baseProcessing = calculateResponseTimeFitness(cloudlet, vm, getCloudletList()); // only once
+                preResponseTimeFitness.put(cloudlet, baseProcessing);
+            } catch (Exception e) {
+                Log.printLine("Precomputation error: " + e.getMessage());
+            }
+        }
+        
+        
+    	for (Cloudlet cloudlet : getCloudletList()) {
+    		this.myit++;
+        	startTime = System.nanoTime();
+        	
+            VMToUsage currentVelocityVM = particle.velocity.get(cloudlet);
+            VMToUsage particleBestPositionVM = particle.bestPosition.get(cloudlet);
+            
+            VMToUsage alphaPositionVM = alphaWolf.getPosition().get(cloudlet);
+            
+            // Update velocity using dynamic coefficients and inertia weight
+            double rand1 = Math.random();
+            double rand2 = Math.random();
+            double updatedUsageIndex =  w * particle.velocity.get(cloudlet).getUsage()
+                    + c1 * rand1 * (alphaPositionVM.getUsage() - currentVelocityVM.getUsage())
+                    + c2 * rand2 * (particleBestPositionVM.getUsage() - currentVelocityVM.getUsage());
+
+            // Ensure the velocity is within the valid range
+            int vmIndex = Math.max(0, Math.min((int) updatedUsageIndex, getVmList().size() - 1));
+
+            VMToUsage updatedVelocityVMToUsage = (currentVelocityVM.getVM().getId() == vmIndex) ? currentVelocityVM : null;
+            VMToUsage updatedPositionVMToUsage = (particle.position.get(cloudlet).getVM().getId() == vmIndex) ? particle.position.get(cloudlet) : null;
+
+       
+
+            if (updatedVelocityVMToUsage != null)
+                particle.velocity.put(cloudlet, updatedVelocityVMToUsage);
+
+            if (updatedPositionVMToUsage != null)
+                particle.position.put(cloudlet, updatedPositionVMToUsage);
+
+            // Recalculate fitness
+            particle.fitness = particle.computeFitness(particle.position, getCloudletList(), getVmList(), 
+            		precomputedProcessingTime, preResponseTimeFitness);
+
+            // Update particle's personal best
+            if (particle.fitness < particle.bestFitness) {
+                particle.bestFitness = particle.fitness;
+                particle.bestPosition = new HashMap<>(particle.position); // Deep copy
+            }
+            
+            endTime = System.nanoTime();
+            long duration = endTime - startTime;
+            this.minimumTime = Math.min(this.minimumTime, duration);
+            this.maximumTime = Math.max(this.maximumTime, duration);
+        }
+    	return 0.0;
+    }
+
+    private List<IParticle2> initializeParticles(int numParticles, List<Cloudlet> cloudlets, List<Vm> vms) {
+        List<IParticle2> particles = new ArrayList<>();
+        for (int i = 0; i < numParticles; i++) {
+            IParticle2 particle = new IParticle2(cloudlets, vms);
+            particles.add(particle);
+        }
+        return particles;
+    }
+
+    public void submitCloudletList(List<? extends Cloudlet> list) {
+        getCloudletList().addAll(list);
+        performHGWSO();
+    }
+}
