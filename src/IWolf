@@ -1,0 +1,680 @@
+package org.cloudbus.cloudsim.examples;
+
+import org.cloudbus.cloudsim.*;
+import org.cloudbus.cloudsim.core.CloudSim;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Random;
+import java.util.stream.Collectors;
+import java.util.Map;
+
+import org.cloudbus.cloudsim.power.PowerHost;
+import org.cloudbus.cloudsim.power.PowerVm;
+
+public class IWolf {
+	
+	
+   List<Cloudlet> cloudlets;	
+   List<Vm> vms;
+  
+
+   
+// 
+//   double loadImbalanceFitness = 0.0;
+//   double responseTimeFitness = 0.0;
+//   double resourceDistributionFitness = 0.0;
+
+//   double weightLoadImbalance = 0.0;  
+//   double weightResponseTime = 0.0;
+//   double weightResourceDistribution = 0.0;
+
+   //private Map<Cloudlet, Vm> position;
+   private Map<Cloudlet, VMToUsage> position2;
+  
+
+   
+	   // private double[] position; // Represents the position (load assignment) of the wolf
+   private double fitness;    // Represents the fitness value of the load balancing solution
+   private double pBestFitness;
+   private Map<Cloudlet, VMToUsage>  pBest;
+ //  double[] velocity;
+   
+   String id;
+       
+       
+   	 
+   	 public IWolf()
+   	 {
+   		 
+   	 }
+   	 
+
+	    
+	    public IWolf(List<Cloudlet> cloudlets, List<Vm> vms, int id) {
+	        // Initialize the position randomly between 0 and 1 for each cloudlet
+	        this.cloudlets = cloudlets;
+	        this.vms = vms;
+	        this.position2 = initializeRandomPosition();
+	      //  this.position = initializeMapping(cloudlets, vms);
+	        		
+	        
+	        
+	        // Initialize fitness to a large value (maximize fitness)
+	        fitness      = Double.MAX_VALUE;
+	        pBestFitness = Double.MAX_VALUE;
+	    //    velocity = new double[cloudlets.size()];
+	    
+	        // Assigning Cloudlet to vm
+			calculateFitness(this.cloudlets,   this.vms);
+	        //this.fitness = calculateFitness();
+			setId("Wolf " + String.valueOf(id));
+			
+	    }
+	    
+	    
+	    private Map<Cloudlet, VMToUsage> velocity;
+
+	    public Map<Cloudlet, VMToUsage> getVelocity() {
+	        return velocity;
+	    }
+
+	    public void setVelocity(Map<Cloudlet, VMToUsage> velocity) {
+	        this.velocity = velocity;
+	    }
+	    
+	    
+	    public int get_ith_position_of_vm(int ith) {
+	    	int vmId = 0;
+	    	for (Map.Entry<Cloudlet, VMToUsage> entry: position2.entrySet()) {
+	    		
+	    		Cloudlet key = entry.getKey();
+	    		VMToUsage value = entry.getValue();
+	    		
+	    		if (key.getCloudletId() == ith) {
+	    			vmId = value.vm.getId();
+	    			break;
+	    		}
+	        }
+	    	return vmId;
+	    }
+	    
+	    public void updatePosition(IWolf alpha, IWolf beta, IWolf delta) {
+	        // Adjust cloudletToVmMapping towards the leaders' mappings
+
+	        for (Cloudlet cloudlet : this.cloudlets) {
+	          //  if (Math.random() < 0.6)
+	           if (Math.random() < 0.6)
+	            	{ // 60% chance to follow Alpha
+	        	   changePostion2(position2, cloudlet);
+	        	   VMToUsage vmusage = alpha.position2.get(cloudlet);
+	        	   vmusage.attachCloudlet(cloudlet.getCloudletLength());
+	                position2.put(cloudlet, vmusage);
+	            }
+	        //   else if (Math.random() < 0.3)
+	            	else if (Math.random() < 0.8)
+	            	{ // 30% chance to follow Beta
+	            		changePostion2(position2, cloudlet);
+	 	        	   VMToUsage vmusage = beta.position2.get(cloudlet);
+	 	        	   vmusage.attachCloudlet(cloudlet.getCloudletLength());
+	 	                position2.put(cloudlet, vmusage);
+	            } else { // 10% chance to follow Delta
+	            	changePostion2(position2, cloudlet);
+	 	        	   VMToUsage vmusage = delta.position2.get(cloudlet);
+	 	        	   vmusage.attachCloudlet(cloudlet.getCloudletLength());
+	 	                position2.put(cloudlet, vmusage);
+	            }
+	        }
+	        calculateFitness(cloudlets, vms);
+	    }
+	    
+	    public List<Cloudlet> getCloudlets() {
+	    	return cloudlets;
+	    }
+	    
+	    void changePostion2(Map<Cloudlet, VMToUsage> position, Cloudlet cloudlet) {
+	    	for (Map.Entry<Cloudlet, VMToUsage> entry: position.entrySet()) {
+	    		VMToUsage vmtousage = entry.getValue();
+	    		Cloudlet check = entry.getKey();
+	    		if (check.getCloudletId() == cloudlet.getCloudletId()) {
+	    			vmtousage.detechCloudlet(cloudlet.getCloudletLength());
+	    			break;
+	    		}
+	    	}
+	    }
+	    
+	    VMToUsage getVMToUsage(Map<Cloudlet, VMToUsage> position, Vm vm) {
+	    	VMToUsage vmusage = null;
+	    	for (Map.Entry<Cloudlet, VMToUsage> entry: position.entrySet()) {
+    			VMToUsage vmtousage = entry.getValue();
+    			if (vmtousage.vm.getId() == vm.getId()) {
+    				vmusage = vmtousage;
+    				break;
+    			}
+    		}
+	    	return vmusage;
+	    }
+	    
+	    private Map<Cloudlet, VMToUsage> initializeRandomPosition() {
+	    	// Local mapping
+	        Map<Cloudlet, VMToUsage> position = new HashMap<>();
+	        Random random = new Random();
+	        for (Cloudlet cloudlet : cloudlets) {
+	        	Vm vm = vms.get(random.nextInt(vms.size()));
+	        	VMToUsage vmusage = null;
+	        	if (position.size() > 0) {
+	        		for (Map.Entry<Cloudlet, VMToUsage> entry: position.entrySet()) {
+	        			VMToUsage vmtousage = entry.getValue();
+	        			if (vmtousage.vm.getId() == vm.getId()) {
+	        				vmusage = vmtousage;
+	        				break;
+	        			}
+	        		}
+	        	}
+	        	if (vmusage == null) {
+	        		vmusage = new VMToUsage(vm);
+	        	}
+	        	vmusage.attachCloudlet(cloudlet.getCloudletLength());
+	        	position.put(cloudlet, vmusage);
+	        }
+	        return position;
+	    }
+	    
+	    public void printCloudletVmMapping() {
+	    	for (Map.Entry<Cloudlet, VMToUsage> entry : position2.entrySet()) {
+	    		Cloudlet key = entry.getKey();
+	    		VMToUsage value = entry.getValue();
+	    		
+	    		Log.printLine("cloudletId: " + key.getCloudletId() + " <=> " +key.getCloudletLength() + "    Vm: " + value.vm.getId() + " <=> " + value.vm.getMips());
+	    	    
+	    	}
+	    }
+	    
+	    class SaveCloudlet {
+	    	List<Cloudlet> cloudlets;
+	    	double total_mips = 0.0;
+	    	public SaveCloudlet() {
+	    		this.cloudlets = new LinkedList<Cloudlet>();
+	    	}
+	    	
+	    	public void addCloudlet(Cloudlet cloudlet) {
+	    		this.cloudlets.add(cloudlet);
+	    	}
+	    	
+	    	@Override
+	    	public String toString() {
+	    		String str = "";
+	    		total_mips = 0.0;
+	    		for (Cloudlet cloudlet : this.cloudlets) {
+	    			str += "("+cloudlet.getCloudletId()+", "+cloudlet.getCloudletLength()+")";
+	    			total_mips += cloudlet.getCloudletLength();
+	    		}
+	    		str += " " + total_mips;
+	    		return str;
+	    	}
+	    	
+	    	double getTotal() {
+	    		return total_mips;
+	    	}
+	    	
+	    }
+	    
+	    public void printCloudletVmFitnessEffi() {
+	    	
+	    	Map<Vm, SaveCloudlet> maplist = new HashMap<Vm, SaveCloudlet>();
+	    	for (Map.Entry<Cloudlet, VMToUsage> entry : position2.entrySet()) {
+	    		Cloudlet key = entry.getKey();
+	    		VMToUsage v = entry.getValue();
+	    		Vm value = v.vm;
+	    		if (maplist.containsKey(value)) {
+	    			SaveCloudlet sc = maplist.get(value);
+	    			sc.addCloudlet(key);
+	    			maplist.put(value, sc);
+	    		} else {
+	    			SaveCloudlet sc = new SaveCloudlet();
+	    			sc.addCloudlet(key);
+	    			maplist.put(value, sc);
+	    		}
+	    	}
+	    	
+//	    	Log.printLine("( " + String.valueOf(getFitness()) + " =>  " + this.weightLoadImbalance + "*"+ this.loadImbalanceFitness + "+" +
+//	                  this.weightResponseTime +"*" + this.responseTimeFitness + "+" +
+//	                  this.weightResourceDistribution +"*" +this.resourceDistributionFitness +  ")");
+	    	
+	    	double total_time2 = 0.0;
+	    	for (Map.Entry<Vm, SaveCloudlet> entry: maplist.entrySet()) {
+	    		Vm key = entry.getKey();
+	    		SaveCloudlet value = entry.getValue();
+	    		Log.printLine("Vm: " + key.getId() + " <=> " + key.getMips() +  " ====>  " + value + " (" + (value.getTotal()/key.getMips()) +" seconds ) ");
+	    		total_time2 += (value.getTotal()/key.getMips());
+	    	}
+	    	Log.printLine("Total Time: " + total_time2);
+	    }
+	    
+	    public void distributeCloudlets() {
+	        // Get the list of VMs
+	        Map<Vm, Integer> vmCount = new HashMap<>();
+
+	        for (VMToUsage vm : position2.values()) {
+	            vmCount.put(vm.vm, vmCount.getOrDefault(vm.vm, 0) + 1);
+	        }
+	        
+	        for (Map.Entry<Vm, Integer> entry : vmCount.entrySet()) {
+	        	Log.printLine("VM Count: " + entry.getValue());
+	        }
+
+	        // Calculate the average number of Cloudlets per VM
+	        int averageCloudletsPerVm = position2.size() / vmCount.size();
+
+	        int loop = 0;
+	        // Distribute Cloudlets equally among VMs
+	        for (Map.Entry<Cloudlet, VMToUsage> entry : position2.entrySet()) {
+	        	Cloudlet cloudlet = entry.getKey();
+	            VMToUsage vm = entry.getValue();
+	            
+	            // Check if the VM exceeds the average number of Cloudlets
+	            if (vmCount.get(vm.vm) > averageCloudletsPerVm) {
+	                // Find a VM with fewer Cloudlets and assign the Cloudlet to it
+	                for (VMToUsage otherVm : position2.values()) {
+	                    if (vmCount.get(otherVm.vm) < averageCloudletsPerVm) {
+	                        position2.put(cloudlet, otherVm);
+	                        vmCount.put(vm.vm, vmCount.get(vm.vm) - 1);
+	                        vmCount.put(otherVm.vm, vmCount.get(otherVm.vm) + 1);
+	                        break;
+	                    }
+	                }	
+	            }
+	        }
+	        
+	        
+	        for (Map.Entry<Vm, Integer> entry : vmCount.entrySet()) {
+	        	Log.printLine("2. VM Count: " + entry.getValue());
+	        }
+	    }
+	       
+	    public void distributeCloudlets2() {
+	        // Get the list of VMs and calculate total cloudlet length for each VM
+	        Map<Vm, Integer> vmCloudletLength = new HashMap<>();
+
+	        for (Map.Entry<Cloudlet, VMToUsage> entry : position2.entrySet()) {
+	        	Cloudlet cloudlet = entry.getKey();
+	            VMToUsage vm = entry.getValue();
+
+	            long cloudletLength = cloudlet.getCloudletLength();
+	            vmCloudletLength.put(vm.vm, (int) (vmCloudletLength.getOrDefault(vm, 0) + cloudletLength));
+	        }
+
+	        // Calculate the average Cloudlet length per VM
+	        Map<Vm, Double> averageCloudletLengthPerVm = new HashMap<>();
+	        for (Vm vm : vmCloudletLength.keySet()) {
+	            int totalCloudletLength = vmCloudletLength.get(vm);
+	            double averageLength = (double) totalCloudletLength / position2.size(); // Use position size instead of vmCloudletCount
+	            averageCloudletLengthPerVm.put(vm, averageLength);
+	        }
+
+	        // Distribute Cloudlets based on average Cloudlet length
+	        for (Map.Entry<Cloudlet, VMToUsage> entry : position2.entrySet()) {
+	        	Cloudlet cloudlet = entry.getKey();
+	            VMToUsage vm = entry.getValue();
+
+	            double cloudletLength = cloudlet.getCloudletLength();
+	            double averageLength = averageCloudletLengthPerVm.get(vm.vm);
+
+	            // Check if the VM exceeds the average Cloudlet length
+	            if (cloudletLength > averageLength) {
+	                // Find a VM with shorter average Cloudlet length and assign the Cloudlet to it
+	                for (VMToUsage otherVm : position2.values()) {
+	                    if (averageCloudletLengthPerVm.get(otherVm.vm) < averageLength) {
+	                        position2.put(cloudlet, otherVm);
+	                        vmCloudletLength.put(vm.vm, vmCloudletLength.get(vm.vm) - (int) cloudletLength);
+	                        vmCloudletLength.put(otherVm.vm, vmCloudletLength.get(otherVm.vm) + (int) cloudletLength);
+	                        break;
+	                    }
+	                }
+	            }
+	        }
+	    }
+	    
+	    
+	    public Map<Cloudlet, VMToUsage> getPosition() {
+	        return position2;
+	    }
+	    
+	    public Map<Cloudlet, VMToUsage> getPositionCopy() {
+	        return Collections.unmodifiableMap(position2);
+	    }
+	    
+	    public int getPosition(int i) {
+	    	int vmId = 0;
+	    	for (Map.Entry<Cloudlet, VMToUsage> entry : position2.entrySet()) {
+	            Cloudlet cloudlet = entry.getKey();
+	            VMToUsage vm = entry.getValue();
+	            if (cloudlet.getCloudletId() == i) {
+	            	vmId = vm.vm.getId();
+	            	break;
+	            }
+	    	}
+	    	return vmId;
+	    }
+	    
+	    public void setPBestPosition() {
+	    	pBest = getPositionCopy();
+	    }
+	    
+	    public Map<Cloudlet, VMToUsage> getPBestPosition() {
+	    	return pBest ;
+	    }
+	    
+	    public double getFitness() {
+	        return fitness;
+	    }
+
+	    public void setFitness(double fitness) {
+	        this.fitness = fitness;
+	    }
+	    
+	    public double getPBestFitness() {
+	    	return this.pBestFitness;
+	    }
+	    
+	    public void setPBestFitness(double pBestFitness) {
+	    	this.pBestFitness = pBestFitness;
+	    }
+	    
+	    public void setId(String id) {
+	    	this.id = id;
+	    }
+	    
+	    public String getId() {
+	    	return id;
+	    }
+
+	    
+//	    public double calculateFitness() {
+//	        double totalDifference = 0;
+//
+//	        for (Map.Entry<Cloudlet, VMToUsage> entry : position2.entrySet()) {
+//	        	Cloudlet cloudlet = entry.getKey();
+//	            VMToUsage value = entry.getValue();
+//	            Vm vm = value.vm;
+//
+//	            // Calculate differences in cloudlet and VM attributes
+//	            double lengthDifference = cloudlet.getCloudletLength() - vm.getMips();
+//	            //double cpuDifference = cloudlet.getCloudletLength() - vm.getTotalMips();
+//	            double cpuDifference = cloudlet.getCloudletLength() - vm.getCurrentRequestedTotalMips();
+//	            double storageDifference = cloudlet.getCloudletFileSize() - vm.getSize();
+//	          //  double ramDifference = cloudlet.getRequiredRam() - vm.getRam();
+//	          
+//
+//	            // Weigh the differences based on their importance
+//	         double fitness1 = (lengthDifference*0.8) + (cpuDifference * 0.1) + (storageDifference * 0.1)  ;
+//	 //     double fitness = (lengthDifference*0.1) + (cpuDifference * 0.1) + (storageDifference * 0.9)  ;
+//	            totalDifference += Math.abs(fitness1);
+//	        }
+//
+//	        this.fitness = totalDifference;
+//	        return totalDifference;
+//	    }
+	    
+	    public void calculateFitness(List<Cloudlet> cloudlets, List<Vm> vms) {
+	    	double loadImbalanceFitness = calculateLoadImbalanceFitness(cloudlets, vms);
+	    	double responseTimeFitness = calculateResponseTimeFitness(cloudlets, vms);
+	    	double resourceDistributionFitness = calculateResourceDistributionVMFitness(vms);
+	        //double MakespanFitness =  calculateMakespanFitness(cloudlets, vms);
+
+	        // You can define a weighted combination of the above fitness components
+	        // based on the importance of each factor to your load balancing objectives
+	      double   weightLoadImbalance = 0.1;  // Adjust weights based on importance
+	       double weightResponseTime = 0.8;
+	       double weightResourceDistribution = 0.1;
+	       // double weightMakespanFitness = 0.2;
+
+	        // Combine the fitness components using weighted sum
+	       this.fitness = weightLoadImbalance * loadImbalanceFitness +
+	                  weightResponseTime * responseTimeFitness +
+	                  weightResourceDistribution * resourceDistributionFitness;
+	   
+	    }
+	    
+
+	    public double calculateLoadImbalanceFitness(List<Cloudlet> cloudlets, List<Vm> vms) {
+	        // Calculate the load on each VM based on the assigned cloudlets
+	        double[] vmLoad = new double[vms.size()];
+	        
+	        for (Cloudlet cloudlet : cloudlets) {
+	            //int assignedVmId = cloudlet.getVmId(); // Tada: review with DK
+	        	int assignedVmId = position2.get(cloudlet).vm.getId();
+	        	
+	            double cloudletLength = cloudlet.getCloudletLength();
+	            
+	            // Add the length of the cloudlet to the load of the assigned VM
+	            vmLoad[assignedVmId] += cloudletLength;
+	        }
+	        
+	        // Calculate load imbalance as the standard deviation of VM loads
+	        double loadImbalance = calculateStandardDeviation(vmLoad);
+	        
+	        // Normalize the load imbalance to obtain a fitness value (lower values are better)
+	        double fitness = 1.0 / (1.0 + loadImbalance);
+	        
+	        return fitness;
+	    }
+
+	    private double calculateStandardDeviation(double[] values) {
+	        // Calculate the standard deviation of an array of values
+	        double sum = 0.0;
+	        double mean = calculateMean(values);
+	        
+	        for (double value : values) {
+	            sum += Math.pow(value - mean, 2);
+	        }
+	        
+	        double variance = sum / values.length;
+	        return Math.sqrt(variance);
+	    }
+
+	    private double calculateMean(double[] values) {
+	        // Calculate the mean (average) of an array of values
+	        double sum = 0.0;
+	        
+	        for (double value : values) {
+	            sum += value;
+	        }
+	        
+	        return sum / values.length;
+	    }
+	        
+	    
+	    
+//_________________________________________________________________________________________________
+	    private double calculateSingleResponseTime(Cloudlet cloudlet, Vm vm) {
+	        // Implement logic to calculate the response time for a cloudlet on a VM
+	        // You can use various factors like cloudlet length, VM's processing power, etc.
+	        double cloudletLength = cloudlet.getCloudletLength();
+	        double vmMips = vm.getMips();
+	        
+	        // Calculate response time (for example, using the formula: responseTime = cloudletLength / vmMips)
+	        double responseTime = cloudletLength / vmMips;
+	        return responseTime;
+	    }
+
+	    // Define a method to calculate average response time for all cloudlets on all VMs
+	    private double calculateAverageResponseTime(List<Cloudlet> cloudlets, List<Vm> vms) {
+	        double totalResponseTime = 0.0;
+	        int totalCloudlets = cloudlets.size();
+
+	        for (Cloudlet cloudlet : cloudlets) {
+	            // Find the VM to which the cloudlet is assigned
+	            //int vmId = cloudlet.getVmId(); // Tada:
+	        	int vmId = position2.get(cloudlet).vm.getId();
+	            Vm vm = vms.get(vmId);
+
+	            // Calculate response time for the cloudlet on the VM
+	            double responseTime = calculateSingleResponseTime(cloudlet, vm);
+	            totalResponseTime += responseTime;
+	        }
+
+	        // Calculate average response time
+	        double averageResponseTime = totalResponseTime / totalCloudlets;
+	        return averageResponseTime;
+	    }
+
+	    // Define the fitness function that evaluates load balancing based on response time
+	    public double calculateResponseTimeFitness(List<Cloudlet> cloudlets, List<Vm> vms) {
+	        // Calculate the average response time for all cloudlets on all VMs
+	        double averageResponseTime = calculateAverageResponseTime(cloudlets, vms);
+
+	        // Define your fitness criteria based on response time
+	        // You can use different objectives, such as minimizing or maximizing response time
+	        // For this example, let's aim to minimize response time
+	        double fitness = 1.0 / (1.0 + averageResponseTime);
+
+	        return fitness;
+	    }
+//_________________________________________________________________________________________________
+
+//	   
+	   
+	   
+	    
+	    public double calculateResourceDistributionVMFitness(List<Vm> vms) {
+	        // Initialize variables to store resource utilization values for all VMs
+	        double[] cpuUtilizations = new double[vms.size()];
+	        double[] memoryUtilizations = new double[vms.size()];
+
+	        // Calculate resource utilization values for each VM
+	        for (int i = 0; i < vms.size(); i++)
+	        //====================================================
+	        {
+	            Vm vm = vms.get(i);
+
+	            // Calculate CPU utilization for the VM
+	            List<Cloudlet> cloudletsAssignedToVm = getCloudletsAssignedToVm(vm);
+	            double totalMipsRequiredByCloudlets = 0;
+	            for (Cloudlet cloudlet : cloudletsAssignedToVm) {
+	                totalMipsRequiredByCloudlets += cloudlet.getCloudletLength();
+	            }
+	            double cpuUtilization = totalMipsRequiredByCloudlets / vm.getMips();
+	            cpuUtilizations[i] = cpuUtilization;
+
+	         // Calculate memory utilization for the VM
+         //double memoryUtilization = vm.getRam().getUtilization();
+	            double memoryUtilization = vm.getCurrentAllocatedRam();
+       //   double memoryUtilization = vm.getTotalUtilizationOfCpu(i);
+	            memoryUtilizations[i] = memoryUtilization;
+	            
+	            
+	            
+		        // Calculate resource distribution fitness based on resource utilization values
+		      //  double cpuDistributionFitness = calculateResourceDistributionFitness(cpuUtilizations);
+		      //  double memoryDistributionFitness = calculateResourceDistributionFitness(memoryUtilizations);
+	
+		        // You can combine the fitness components if needed
+		     //   double overallResourceDistributionFitness = (cpuDistributionFitness + memoryDistributionFitness) / 2.0;
+	
+		        // Return the overall resource distribution fitness
+		       // return overallResourceDistributionFitness;
+	        }
+	        
+	      //====================================================
+	        
+
+	        // Calculate resource distribution fitness based on resource utilization values
+	        double cpuDistributionFitness = calculateResourceDistributionFitness(cpuUtilizations);
+	        double memoryDistributionFitness = calculateResourceDistributionFitnessMem(memoryUtilizations);
+	        // Assuming you have a method for memory distribution fitness, you can use it here.
+	        // double memoryDistributionFitness = calculateResourceDistributionFitness(memoryUtilizations);
+	        double overallResourceDistributionFitness = (cpuDistributionFitness + memoryDistributionFitness) / 2.0;
+	    	
+	        // For now, we're using only CPU distribution fitness
+	       // double overallResourceDistributionFitness = cpuDistributionFitness;
+
+	        // Return the overall resource distribution fitness
+	        return overallResourceDistributionFitness;
+	    }
+	    
+	    private List<Cloudlet> getCloudletsAssignedToVm(Vm vm) {
+            
+            List<Cloudlet> allCloudlets = getCloudletList();
+            //int assignedVmId = position2.get(cloudlet).vm.getId();
+            
+            // Filter cloudlets based on VM ID and collect the results
+            List<Cloudlet> list =  allCloudlets.stream()
+                               .filter(cloudlet -> position2.get(cloudlet).vm.getId() == vm.getId())
+                               .collect(Collectors.toList());
+            return list;
+        }
+	    
+	    public List<Cloudlet> getCloudletList() {
+	    	
+	    	return   cloudlets;	
+	     
+	    }
+	    
+	    
+	    
+	 // Helper method to calculate resource distribution fitness based on an array of utilization values
+	    private double calculateResourceDistributionFitness(double[] utilizationValues) {
+	    	double mean = calculateMean(utilizationValues);
+	        double sumSquaredDifferences = 0.0;
+	        
+	        for (double utilization : utilizationValues) {
+	            double difference = utilization - mean;
+	            sumSquaredDifferences += difference * difference;
+	        }
+	        
+	        double variance = sumSquaredDifferences / utilizationValues.length;
+	        double standardDeviation = Math.sqrt(variance);
+	        
+	        // The lower the standard deviation, the better the resource distribution
+	        // Normalize the fitness value to be higher when standardDeviation is lower
+	        // Add 1.0 to avoid division by zero and ensure higher fitness values are better;
+	        double ret = 1.0 / (1.0 + standardDeviation); 
+	        return ret;
+	    }
+	    
+	    private double calculateResourceDistributionFitnessMem(double[] utilizationValues) {
+	    	double mean = calculateMean(utilizationValues);
+	        double sumSquaredDifferences = 0.0;
+	        
+	        for (double utilization : utilizationValues) {
+	            double difference = utilization - mean;
+	            sumSquaredDifferences += difference * difference;
+	        }
+	        
+	        double variance = sumSquaredDifferences / utilizationValues.length;
+	        double standardDeviation = Math.sqrt(variance);
+	        
+	        // The lower the standard deviation, the better the resource distribution
+	        // Normalize the fitness value to be higher when standardDeviation is lower
+	        // Add 1.0 to avoid division by zero and ensure higher fitness values are better;
+	        double ret = 1.0 / (1.0 + standardDeviation); 
+	        return ret;
+	    }
+	    
+	    // Helper method to calculate the variance of an array of values
+	    private double calculateVariance(double[] values) {
+	        double mean = calculateMean(values);
+	        double sumOfSquares = 0.0;
+
+	        for (double value : values) {
+	            sumOfSquares += Math.pow(value - mean, 2);
+	        }
+
+	        return sumOfSquares / (values.length - 1); // Use (n-1) for sample variance
+	    }
+
+	}
+	
+	
+	
+	
+	
+	
