@@ -1,0 +1,42 @@
+package org.cloudbus.cloudsim.examples;
+
+import org.cloudbus.cloudsim.Vm;
+
+public  class VMToUsage {
+	long usage;
+	Vm vm;
+	public VMToUsage(Vm vm) {
+		this.vm = vm;
+		this.usage = 0;
+	}
+	public VMToUsage(Vm vm, long usage) {
+		this.vm = vm;
+		this.usage = usage;
+	}
+	
+	public void attachCloudlet(long usage) {
+		this.usage += usage;
+	}
+	
+	public void detechCloudlet(long usage) {
+		if (this.usage > usage)
+			this.usage -= usage;
+		else 
+			this.usage = 0;
+	}
+	
+	public void setUsage(long usage) {
+		this.usage = usage;
+	}
+	
+	public long getUsage() {
+		return this.usage;
+	}
+	
+	
+	public Vm getVM() {
+		return this.vm;
+		
+	}
+	
+}
