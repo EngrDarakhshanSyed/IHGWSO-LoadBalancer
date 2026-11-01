@@ -1,0 +1,319 @@
+package org.cloudbus.cloudsim.examples;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.stream.Collectors;
+
+import org.cloudbus.cloudsim.Cloudlet;
+import org.cloudbus.cloudsim.Log;
+import org.cloudbus.cloudsim.Vm;
+import org.cloudbus.cloudsim.examples.IWolf.SaveCloudlet;
+import java.util.stream.Collectors;
+public class IParticle2 {
+	public Map<Cloudlet, VMToUsage> position;
+    public Map<Cloudlet, VMToUsage> velocity;
+    public Map<Cloudlet, VMToUsage> bestPosition;
+  
+    double fitness;
+    double bestFitness;
+   
+
+    public IParticle2(List<Cloudlet> cloudlets, List<Vm> vms) {
+        this.position = initializeRandomPosition(cloudlets, vms);
+        this.velocity = initializeRandomVelocity(cloudlets, vms);
+        this.bestPosition = new HashMap<>(this.position); // Initially, the best position is the same as the starting position.
+        
+        Map<Cloudlet, Double> precomputedProcessingTime = new HashMap<>();
+        
+        for (Map.Entry<Cloudlet, VMToUsage> entry : this.position.entrySet()) {
+            Cloudlet cloudlet = entry.getKey();
+            Vm vm = entry.getValue().getVM();
+
+            try {
+                double baseProcessing = getProcessingTime(cloudlet, vm); // only once
+                precomputedProcessingTime.put(cloudlet, baseProcessing);
+            } catch (Exception e) {
+                Log.printLine("Precomputation error: " + e.getMessage());
+            }
+        }
+        
+        Map<Cloudlet, Double> preResponseTimeFitness = new HashMap<>();
+        for (Map.Entry<Cloudlet, VMToUsage> entry : this.position.entrySet()) {
+            Cloudlet cloudlet = entry.getKey();
+            VMToUsage vm = entry.getValue();
+
+            try {
+                double baseProcessing = calculateResponseTimeFitness(cloudlet, vm, cloudlets); // only once
+                preResponseTimeFitness.put(cloudlet, baseProcessing);
+            } catch (Exception e) {
+                Log.printLine("Precomputation error: " + e.getMessage());
+            }
+        }
+        
+        fitness = computeFitness(position, cloudlets, vms, precomputedProcessingTime, preResponseTimeFitness);
+        bestFitness = fitness;
+    
+    
+    }
+    
+
+
+    private Map<Cloudlet, VMToUsage> initializeRandomPosition(List<Cloudlet> cloudlets, List<Vm> vms) {
+        Map<Cloudlet, VMToUsage> position = new HashMap<>();
+       // Particle particle = wolfInstance.new Particle();
+        Random random = new Random();
+        for (Cloudlet cloudlet : cloudlets) {
+            Vm selectedVm = vms.get(random.nextInt(vms.size()));
+            VMToUsage vmUsage = position.getOrDefault(cloudlet, new VMToUsage(selectedVm));
+            vmUsage.attachCloudlet(cloudlet.getCloudletLength());
+            position.put(cloudlet, vmUsage);
+           // Log.printLine("Position: " + cloudlet.getCloudletId() + " => " + vmUsage.vm.getId());
+        }
+        return position;
+    }
+    
+    private Map<Cloudlet, VMToUsage> initializeRandomVelocity(List<Cloudlet> cloudlets, List<Vm> vms) {
+        Map<Cloudlet, VMToUsage> velocity = new HashMap<>();
+        Random random = new Random();
+        for (Cloudlet cloudlet : cloudlets) {
+            Vm selectedVm = vms.get(random.nextInt(vms.size()));
+            VMToUsage vmUsage = new VMToUsage(selectedVm);
+            vmUsage.attachCloudlet(cloudlet.getCloudletLength());
+            velocity.put(cloudlet, vmUsage);
+         //   Log.printLine("Velocity: " + cloudlet.getCloudletId() + " => " + vmUsage.vm.getId());
+        }
+        return velocity;
+    }
+    
+
+    
+    public double computeFitness(Map<Cloudlet, VMToUsage> position, List<Cloudlet> cloudlets, 
+    		List<Vm> vms, Map<Cloudlet, Double> precomputedProcessingTime,
+    		Map<Cloudlet, Double> preResponseTimeFitness) {
+        double makespan = 0;
+        double throughput = 0;
+        double totalResponseTime = 0;
+
+        double totalProcessingTime = 0;
+        Random rand = new Random();
+        double processingTime = 0;
+        double responseTimeFitness = 0;
+        
+
+        for (Map.Entry<Cloudlet, VMToUsage> entry : position.entrySet()) {
+            Cloudlet cloudlet = entry.getKey();
+            VMToUsage vmUsage = entry.getValue();
+
+            try {
+	            // Introduce randomness in the processing time calculation
+            	//double randomfactor = 0.8 + 0.4 * rand.nextDouble();
+	            processingTime = precomputedProcessingTime.get(cloudlet) * (0.8 + 0.4 * rand.nextDouble());
+	            responseTimeFitness = preResponseTimeFitness.get(cloudlet) * (0.8 + 0.4 * rand.nextDouble());//calculateResponseTimeFitness(cloudlet, vmUsage, cloudlets) * randomfactor;
+            } catch (Exception ex) {
+            	Log.printLine(ex.getMessage());
+            	Log.printLine(ex.getStackTrace()[0].getLineNumber());
+            	System.exit(-2);
+            }
+            totalProcessingTime += processingTime;
+            totalResponseTime += responseTimeFitness;
+            makespan = Math.max(makespan, processingTime);
+        }
+
+       throughput = cloudlets.size() / totalProcessingTime;
+
+        // Weight the objectives based on importance
+        double w1 = 0.3;
+        double w2 = 0.3;
+        double w3 = 0.4;
+        
+        double fitnessValue = w1 * makespan + w2 * (1/throughput) + w3 * totalResponseTime;
+        //Log.printLine("Each particle => [" + fitnessValue + "] = " + w1 + " * " + makespan + " + " + w2 + " * " + throughput + " + " + w3 + " * " + totalResponseTime);
+        
+        return fitnessValue;
+    }
+
+    private double getProcessingTime(Cloudlet cloudlet, Vm vm) {
+        try {
+            if (vm.getMips() <= 0) {
+                return Double.MAX_VALUE;
+            }
+        } catch(Exception e) {
+            Log.print("Exception " + e.toString());
+        }
+
+        return cloudlet.getCloudletLength() / vm.getMips();
+    }
+
+    private double calculateResponseTimeFitness(Cloudlet cloudlet, VMToUsage vm, List<Cloudlet> allCloudlets) {
+        
+    	double dataTransferTime = cloudlet.getCloudletFileSize() / Math.max(1.0, vm.getVM().getBw());
+        double vmCurrentEndTime = getVmCurrentEndTime(vm, allCloudlets);
+        double waitingTime = Math.max(0, vmCurrentEndTime - cloudlet.getSubmissionTime());
+        
+        return dataTransferTime + waitingTime;
+    } 
+    
+    
+    
+    
+    
+    
+//    public double computeFitness(Map<Cloudlet, VMToUsage> position, List<Cloudlet> cloudlets, List<Vm> vms) {
+//        double makespan = 0;
+//        double throughput = 0;
+//        double totalResponseTime = 0;
+//
+//        // Assuming a method `getProcessingTime(Cloudlet cloudlet, Vm vm)` 
+//        // that gives the processing time of a cloudlet on a particular VM.
+//        // And a method `getVmUtilization(Vm vm)` that gives the utilization 
+//        // of the VM as a percentage (between 0 and 1).
+//
+//        double totalProcessingTime = 0;
+//        for (Map.Entry<Cloudlet, VMToUsage> entry: position.entrySet()) {
+//        
+//            
+//            Cloudlet cloudlet = entry.getKey();
+//    		VMToUsage vm = entry.getValue();
+//
+//            
+//            double processingTime = getProcessingTime(cloudlet, vm);
+//            double responseTimeFitness = calculateResponseTimeFitness(cloudlet, vm, cloudlets);
+//            totalProcessingTime += processingTime;
+//            totalResponseTime += responseTimeFitness ;
+//            makespan = Math.max(makespan, processingTime); // Makespan is the maximum processing time
+//            
+//        }
+//
+//        throughput = cloudlets.size() / totalProcessingTime; // Total cloudlets per total processing time
+//      
+//        // Weight the objectives based on importance.
+//        // Assuming w1, w2, and w3 are weights for makespan, throughput, and resource utilization respectively.
+//        double w1 = 0.3;
+//        double w2 = 0.3;
+//        double w3 = 0.4;
+//        // The objective is to minimize makespan and maximize throughput and resource utilization.
+//        // So, we invert throughput and resource utilization for the sake of optimization.
+//        double fitn = w1 * makespan + w2 * throughput+ w3* totalResponseTime;
+//        Log.printLine("Each particle => [" + fitn +"] = "+w1+" * "+makespan+" + "+w2+" * "+throughput+" + "+w3+" * "+totalResponseTime);
+//        
+//        return fitn;
+//    }
+    
+//    private double getProcessingTime(Cloudlet cloudlet, VMToUsage vm) {
+//    	try {
+//	        if (vm.getVM().getMips() <= 0) {  // Prevent division by zero
+//	            return Double.MAX_VALUE;  // Represents a very long processing time (almost infinite)
+//	        }
+//    	} catch(Exception e) {
+//    		Log.print("Exception " + e.toString());
+//    	}
+//        
+//        return cloudlet.getCloudletLength() / vm.getVM().getMips();
+//        
+//        //check
+//    }
+//    
+//    private double calculateResponseTimeFitness(Cloudlet cloudlet, VMToUsage vm, List<Cloudlet> allCloudlets) {
+//        // Calculate data transfer time
+//        double dataTransferTime = cloudlet.getCloudletFileSize() / Math.max(1.0, vm.getVM().getBw());
+//
+//        // Calculate waiting time. This assumes the VM processes cloudlets sequentially.
+//        // If a VM finishes its last cloudlet at time t, any new cloudlet will have to wait until time t.
+//        double vmCurrentEndTime = getVmCurrentEndTime(vm, allCloudlets);
+//        double waitingTime = Math.max(0, vmCurrentEndTime - cloudlet.getSubmissionTime());
+//
+//        // Total response time
+//        double responseTime = dataTransferTime + waitingTime;
+//
+//        // For fitness, you can directly return the response time. If you want to penalize longer response times more severely,
+//        // you might consider using a power function or an exponential. For simplicity, we're just returning the linear value.
+//        return responseTime;
+//    }
+
+    private double getVmCurrentEndTime(VMToUsage vm, List<Cloudlet> allCloudlets) {
+        List<Cloudlet> assignedCloudlets = getCloudletsAssignedToVm(vm, allCloudlets);
+
+        // Compute the total processing time of all cloudlets assigned to this VM
+        double totalProcessingTime = assignedCloudlets.stream()
+                .mapToDouble(cloudlet -> getProcessingTime(cloudlet, vm.getVM()))
+                .sum();
+
+        return totalProcessingTime;
+    }
+    
+    private List<Cloudlet> getCloudletsAssignedToVm(VMToUsage vm, List<Cloudlet> allCloudlets) {
+        // Assuming a method `getCloudletList()` that gives you all cloudlets
+
+        // Filter out the cloudlets that are assigned to the given VM
+        return allCloudlets.stream()
+                           .filter(cloudlet -> cloudlet.getVmId() == vm.getVM().getId())
+                           .collect(Collectors.toList());
+    }
+    
+    class SaveCloudlet {
+    	List<Cloudlet> cloudlets;
+    	double total_mips = 0.0;
+    	public SaveCloudlet() {
+    		this.cloudlets = new LinkedList<Cloudlet>();
+    	}
+    	
+    	public void addCloudlet(Cloudlet cloudlet) {
+    		this.cloudlets.add(cloudlet);
+    	}
+    	
+    	@Override
+    	public String toString() {
+    		String str = "";
+    		total_mips = 0.0;
+    		for (Cloudlet cloudlet : this.cloudlets) {
+    			str += "("+cloudlet.getCloudletId()+", "+cloudlet.getCloudletLength()+")";
+    			total_mips += cloudlet.getCloudletLength();
+    		}
+    		str += " " + total_mips;
+    		return str;
+    	}
+    	
+    	double getTotal() {
+    		return total_mips;
+    	}
+    	
+    }
+    
+    public void printCloudletVmFitnessEffi() {
+    	
+    	Map<Vm, SaveCloudlet> maplist = new HashMap<Vm, SaveCloudlet>();
+    	for (Map.Entry<Cloudlet, VMToUsage> entry : position.entrySet()) {
+    		Cloudlet key = entry.getKey();
+    		VMToUsage v = entry.getValue();
+    		Vm value = v.vm;
+    		if (maplist.containsKey(value)) {
+    			SaveCloudlet sc = maplist.get(value);
+    			sc.addCloudlet(key);
+    			maplist.put(value, sc);
+    		} else {
+    			SaveCloudlet sc = new SaveCloudlet();
+    			sc.addCloudlet(key);
+    			maplist.put(value, sc);
+    		}
+    	}
+    	
+
+    	
+    	double total_time2 = 0.0;
+    	for (Map.Entry<Vm, SaveCloudlet> entry: maplist.entrySet()) {
+    		Vm key = entry.getKey();
+    		SaveCloudlet value = entry.getValue();
+    		Log.printLine("IParticle Vm: " + key.getId() + " <=> " + key.getMips() +  " ====>  " + value + " (" + (value.getTotal()/key.getMips()) +" seconds ) ");
+    		total_time2 += (value.getTotal()/key.getMips());
+    	}
+    	Log.printLine("Total Time: " + total_time2);
+    }
+}
+
